@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Lunara IMDb Guard
  * Plugin URI: https://lunarafilm.com/
- * Description: Validates review IMDb IDs against title and year, auto-fills clear matches, and provides an editorial audit screen for Lunara.
- * Version: 0.1.0
+ * Description: Validates review IMDb IDs against title and year, auto-fills clear matches, syncs TMDB poster/backdrop artwork, and provides an editorial audit screen for Lunara.
+ * Version: 0.2.0
  * Author: Lunara Film
  * Author URI: https://lunarafilm.com/
  * License: GPL v2 or later
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'LUNARA_IMDB_GUARD_VERSION', '0.1.0' );
+define( 'LUNARA_IMDB_GUARD_VERSION', '0.2.0' );
 define( 'LUNARA_IMDB_GUARD_FILE', __FILE__ );
 define( 'LUNARA_IMDB_GUARD_DIR', plugin_dir_path( __FILE__ ) );
 define( 'LUNARA_IMDB_GUARD_DEFAULT_OMDB_API_KEY', '' );
@@ -30,6 +30,10 @@ final class Lunara_IMDb_Guard {
 	const META_YEAR      = '_lunara_imdb_guard_expected_year';
 	const META_CHECKED   = '_lunara_imdb_guard_last_checked';
 	const META_LOOKUP    = '_lunara_imdb_guard_lookup_title';
+	
+	// Custom fields for the TMDB image URLs
+	const META_POSTER    = '_lunara_tmdb_poster_url';
+	const META_BACKDROP  = '_lunara_tmdb_backdrop_url';
 
 	/**
 	 * Singleton instance.
@@ -138,6 +142,9 @@ final class Lunara_IMDb_Guard {
 		$map_state      = $map_path && is_writable( $map_path ) ? __( 'Writable', 'lunara-imdb-guard' ) : __( 'Read-only or missing', 'lunara-imdb-guard' );
 		$lookup_context = $this->resolve_lookup_context( $post_id );
 		$lookup_source  = $this->format_lookup_source_label( $lookup_context['source'] );
+		
+		$poster_url     = get_post_meta( $post_id, self::META_POSTER, true );
+		$backdrop_url   = get_post_meta( $post_id, self::META_BACKDROP, true );
 
 		$validate_url = wp_nonce_url(
 			add_query_arg(
@@ -177,6 +184,7 @@ final class Lunara_IMDb_Guard {
 			.lunara-imdb-guard-actions .button { width:100%; text-align:center; }
 			.lunara-imdb-guard-help { font-size:12px; color:#5b6670; line-height:1.5; }
 			.lunara-imdb-guard-meta input[type="text"] { width:100%; }
+			.lunara-imdb-guard-media-preview { margin-top: 10px; font-size: 11px; color: #646970; }
 		</style>
 		<div class="lunara-imdb-guard-meta">
 			<?php wp_nonce_field( 'lunara_imdb_guard_meta_box', 'lunara_imdb_guard_nonce' ); ?>
@@ -204,7 +212,20 @@ final class Lunara_IMDb_Guard {
 			<?php if ( '' !== $state['expected_title'] ) : ?>
 				<p><strong><?php esc_html_e( 'Matched OMDb Title', 'lunara-imdb-guard' ); ?></strong><br><?php echo esc_html( $state['expected_title'] ); ?><?php echo '' !== $state['expected_year'] ? ' (' . esc_html( $state['expected_year'] ) . ')' : ''; ?></p>
 			<?php endif; ?>
-			<p><strong><?php esc_html_e( 'Theme Map Sync', 'lunara-imdb-guard' ); ?></strong><br><?php echo esc_html( $map_state ); ?></p>
+			
+			<?php if ( '' !== $poster_url || '' !== $backdrop_url ) : ?>
+				<div class="lunara-imdb-guard-media-preview">
+					<strong><?php esc_html_e( 'TMDB Assets Synced:', 'lunara-imdb-guard' ); ?></strong><br>
+					<?php if ( '' !== $poster_url ) : ?>
+						&#10003; <a href="<?php echo esc_url( $poster_url ); ?>" target="_blank"><?php esc_html_e( 'Poster Image', 'lunara-imdb-guard' ); ?></a><br>
+					<?php endif; ?>
+					<?php if ( '' !== $backdrop_url ) : ?>
+						&#10003; <a href="<?php echo esc_url( $backdrop_url ); ?>" target="_blank"><?php esc_html_e( 'Backdrop Image', 'lunara-imdb-guard' ); ?></a>
+					<?php endif; ?>
+				</div>
+			<?php endif; ?>
+
+			<p style="margin-top:10px;"><strong><?php esc_html_e( 'Theme Map Sync', 'lunara-imdb-guard' ); ?></strong><br><?php echo esc_html( $map_state ); ?></p>
 
 			<div class="lunara-imdb-guard-actions">
 				<a class="button" href="<?php echo esc_url( $validate_url ); ?>"><?php esc_html_e( 'Validate IMDb ID', 'lunara-imdb-guard' ); ?></a>
@@ -254,7 +275,7 @@ final class Lunara_IMDb_Guard {
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'Lunara IMDb Guard', 'lunara-imdb-guard' ); ?></h1>
-			<p><?php esc_html_e( 'This plugin validates review title/year data against OMDb, auto-fills clear missing IMDb IDs, and keeps an editorial audit trail inside WordPress.', 'lunara-imdb-guard' ); ?></p>
+			<p><?php esc_html_e( 'This plugin validates review title/year data against OMDb, auto-fills clear missing IMDb IDs, syncs high-resolution assets from TMDB, and keeps an editorial audit trail inside WordPress.', 'lunara-imdb-guard' ); ?></p>
 
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:18px 0 28px;">
 				<input type="hidden" name="action" value="lunara_imdb_guard_save_settings">
@@ -288,19 +309,23 @@ final class Lunara_IMDb_Guard {
 						<th><?php esc_html_e( 'Current IMDb ID', 'lunara-imdb-guard' ); ?></th>
 						<th><?php esc_html_e( 'Status', 'lunara-imdb-guard' ); ?></th>
 						<th><?php esc_html_e( 'Suggested ID', 'lunara-imdb-guard' ); ?></th>
+						<th><?php esc_html_e( 'TMDB Media', 'lunara-imdb-guard' ); ?></th>
 						<th><?php esc_html_e( 'Last Checked', 'lunara-imdb-guard' ); ?></th>
 						<th><?php esc_html_e( 'Action', 'lunara-imdb-guard' ); ?></th>
 					</tr>
 				</thead>
 				<tbody>
 					<?php if ( empty( $reviews ) ) : ?>
-						<tr><td colspan="7"><?php esc_html_e( 'No published reviews found.', 'lunara-imdb-guard' ); ?></td></tr>
+						<tr><td colspan="8"><?php esc_html_e( 'No published reviews found.', 'lunara-imdb-guard' ); ?></td></tr>
 					<?php else : ?>
 						<?php foreach ( $reviews as $review_id ) : ?>
 							<?php
-							$state       = $this->get_stored_state( $review_id );
-							$current_id  = $this->normalize_imdb_id( get_post_meta( $review_id, '_lunara_imdb_title_id', true ) );
-							$year        = trim( (string) get_post_meta( $review_id, '_lunara_year', true ) );
+							$state        = $this->get_stored_state( $review_id );
+							$current_id   = $this->normalize_imdb_id( get_post_meta( $review_id, '_lunara_imdb_title_id', true ) );
+							$year         = trim( (string) get_post_meta( $review_id, '_lunara_year', true ) );
+							$has_poster   = '' !== get_post_meta( $review_id, self::META_POSTER, true );
+							$has_backdrop = '' !== get_post_meta( $review_id, self::META_BACKDROP, true );
+							
 							$validate_id = wp_nonce_url(
 								add_query_arg(
 									array(
@@ -328,6 +353,15 @@ final class Lunara_IMDb_Guard {
 								<td><?php echo '' !== $current_id ? '<code>' . esc_html( $current_id ) . '</code>' : '&mdash;'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
 								<td><?php echo esc_html( $this->format_status_label( $state['status'] ) ); ?></td>
 								<td><?php echo '' !== $state['expected_id'] ? '<code>' . esc_html( $state['expected_id'] ) . '</code>' : '&mdash;'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
+								<td>
+									<?php 
+									if ( $has_poster || $has_backdrop ) {
+										echo '<span style="color:#17653a;">&#10003; ' . esc_html__( 'Synced', 'lunara-imdb-guard' ) . '</span>';
+									} else {
+										echo '<span style="color:#646970;">&mdash;</span>';
+									}
+									?>
+								</td>
 								<td><?php echo '' !== $state['checked_at'] ? esc_html( $state['checked_at'] ) : '&mdash;'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
 								<td>
 									<a class="button" href="<?php echo esc_url( $validate_id ); ?>"><?php esc_html_e( 'Validate', 'lunara-imdb-guard' ); ?></a>
@@ -388,6 +422,9 @@ final class Lunara_IMDb_Guard {
 				get_post_meta( $post_id, '_lunara_year', true ),
 				$state['expected_id']
 			);
+			
+			// Dynamic asset lookup following manual alignment application
+			$this->sync_lunara_tmdb_images( $post_id, $state['expected_id'] );
 		}
 
 		$this->validate_review( $post_id, false );
@@ -599,6 +636,10 @@ final class Lunara_IMDb_Guard {
 				$year
 			);
 			$this->sync_theme_map_entry( $title, $expected_year, $expected_id );
+			
+			// Process TMDB assets matching our newly autofilled ID
+			$this->sync_lunara_tmdb_images( $post_id, $expected_id );
+			
 			$this->store_state( $post_id, $result );
 			return $result;
 		}
@@ -619,6 +660,10 @@ final class Lunara_IMDb_Guard {
 				$year
 			);
 			$this->sync_theme_map_entry( $title, $expected_year, $expected_id );
+			
+			// Keep images updated on active verification passes
+			$this->sync_lunara_tmdb_images( $post_id, $current_id );
+			
 			$this->store_state( $post_id, $result );
 			return $result;
 		}
@@ -715,6 +760,83 @@ final class Lunara_IMDb_Guard {
 	}
 
 	/**
+	 * Query TMDB to retrieve uncompressed poster and backdrop layouts using an IMDb ID.
+	 *
+	 * @param string $imdb_id The 'tt' string constant.
+	 * @return array|false
+	 */
+	private function fetch_tmdb_images( $imdb_id ) {
+		$api_key = 'b17bcb1a2b1a44a50898eaf079bcdede';
+		
+		// Step 1: Resolve the internal numeric TMDB ID via External ID endpoint
+		$find_url = "https://api.themoviedb.org/3/find/{$imdb_id}?api_key={$api_key}&external_source=imdb_id";
+		$find_response = wp_remote_get( $find_url, array( 'timeout' => 10 ) );
+		
+		if ( is_wp_error( $find_response ) ) {
+			return false;
+		}
+		
+		$find_data = json_decode( wp_remote_retrieve_body( $find_response ), true );
+		if ( empty( $find_data['movie_results'] ) || ! is_array( $find_data['movie_results'] ) ) {
+			return false;
+		}
+		
+		$tmdb_id = $find_data['movie_results'][0]['id'];
+		
+		// Step 2: Request image collection array
+		$images_url = "https://api.themoviedb.org/3/movie/{$tmdb_id}/images?api_key={$api_key}";
+		$images_response = wp_remote_get( $images_url, array( 'timeout' => 10 ) );
+		
+		if ( is_wp_error( $images_response ) ) {
+			return false;
+		}
+		
+		$images_data = json_decode( wp_remote_retrieve_body( $images_response ), true );
+		
+		// Original resolution path config
+		$base_image_url = 'https://image.tmdb.org/t/p/original';
+		$output = array(
+			'poster'   => '',
+			'backdrop' => '',
+		);
+		
+		if ( ! empty( $images_data['posters'] ) && is_array( $images_data['posters'] ) ) {
+			$output['poster'] = $base_image_url . $images_data['posters'][0]['file_path'];
+		}
+		
+		if ( ! empty( $images_data['backdrops'] ) && is_array( $images_data['backdrops'] ) ) {
+			$output['backdrop'] = $base_image_url . $images_data['backdrops'][0]['file_path'];
+		}
+		
+		return $output;
+	}
+
+	/**
+	 * Orchestrate image population and metadata storage for a specific post.
+	 *
+	 * @param int    $post_id Post context identifier.
+	 * @param string $imdb_id The 'tt' string constant.
+	 * @return void
+	 */
+	private function sync_lunara_tmdb_images( $post_id, $imdb_id ) {
+		$images = $this->fetch_tmdb_images( $imdb_id );
+		
+		if ( is_array( $images ) ) {
+			if ( ! empty( $images['poster'] ) ) {
+				update_post_meta( $post_id, self::META_POSTER, esc_url_raw( $images['poster'] ) );
+			} else {
+				delete_post_meta( $post_id, self::META_POSTER );
+			}
+			
+			if ( ! empty( $images['backdrop'] ) ) {
+				update_post_meta( $post_id, self::META_BACKDROP, esc_url_raw( $images['backdrop'] ) );
+			} else {
+				delete_post_meta( $post_id, self::META_BACKDROP );
+			}
+		}
+	}
+
+	/**
 	 * Persist an optional manual lookup-title override.
 	 *
 	 * @param int $post_id Review post ID.
@@ -791,7 +913,7 @@ final class Lunara_IMDb_Guard {
 			);
 		}
 
-		if ( preg_match( '/<!--\s*["“”]?([^<\r\n]+?)["“”]?\s*\((\d{4})\)(?:[^>]*)-->/u', $content, $matches ) ) {
+		if ( preg_match( '//u', $content, $matches ) ) {
 			return array(
 				'title' => $this->clean_lookup_title( $matches[1] ),
 				'year'  => trim( (string) $matches[2] ),
