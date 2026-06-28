@@ -248,9 +248,9 @@ final class Lunara_IMDb_Guard {
 			wp_die( esc_html__( 'You do not have permission to view this page.', 'lunara-imdb-guard' ) );
 		}
 
-		$api_key       = $this->get_api_key();
-		$tmdb_api_key  = trim( (string) get_option( self::OPTION_TMDB_API_KEY, '' ) );
-		$map_path      = $this->get_theme_map_path();
+		$omdb_configured = '' !== $this->get_api_key();
+		$tmdb_configured = '' !== $this->get_tmdb_api_key();
+		$map_path        = $this->get_theme_map_path();
 		$reviews       = get_posts(
 			array(
 				'post_type'              => 'review',
@@ -286,15 +286,15 @@ final class Lunara_IMDb_Guard {
 					<tr>
 						<th scope="row"><label for="lunara_imdb_guard_omdb_api_key"><?php esc_html_e( 'OMDb API Key', 'lunara-imdb-guard' ); ?></label></th>
 						<td>
-							<input type="text" class="regular-text" id="lunara_imdb_guard_omdb_api_key" name="lunara_imdb_guard_omdb_api_key" value="<?php echo esc_attr( $api_key ); ?>">
-							<p class="description"><?php esc_html_e( 'Used for title/year to IMDb ID validation. This plugin currently defaults to the same OMDb key used by your desktop lookup tool unless you override it here.', 'lunara-imdb-guard' ); ?></p>
+							<input type="password" class="regular-text" id="lunara_imdb_guard_omdb_api_key" name="lunara_imdb_guard_omdb_api_key" value="" autocomplete="new-password" placeholder="<?php echo esc_attr( $omdb_configured ? __( 'Saved — paste a new key to replace', 'lunara-imdb-guard' ) : __( 'Paste OMDb API key', 'lunara-imdb-guard' ) ); ?>">
+							<p class="description"><?php echo esc_html( $omdb_configured ? __( 'Status: Configured. The saved key is write-only and never displayed — leave blank to keep it, or paste a new key to replace it.', 'lunara-imdb-guard' ) : __( 'Not configured. Used for title/year to IMDb ID validation.', 'lunara-imdb-guard' ) ); ?></p>
 						</td>
 					</tr>
 					<tr>
 						<th scope="row"><label for="lunara_imdb_guard_tmdb_api_key"><?php esc_html_e( 'TMDB API Key', 'lunara-imdb-guard' ); ?></label></th>
 						<td>
-							<input type="password" class="regular-text" id="lunara_imdb_guard_tmdb_api_key" name="lunara_imdb_guard_tmdb_api_key" value="<?php echo esc_attr( $tmdb_api_key ); ?>" autocomplete="new-password">
-							<p class="description"><?php esc_html_e( 'Used to sync poster and backdrop artwork from TMDB. Leave blank to reuse the Oscars Ledger TMDB key when that plugin is active.', 'lunara-imdb-guard' ); ?></p>
+							<input type="password" class="regular-text" id="lunara_imdb_guard_tmdb_api_key" name="lunara_imdb_guard_tmdb_api_key" value="" autocomplete="new-password" placeholder="<?php echo esc_attr( $tmdb_configured ? __( 'Saved — paste a new key to replace', 'lunara-imdb-guard' ) : __( 'Paste TMDB API key (optional)', 'lunara-imdb-guard' ) ); ?>">
+							<p class="description"><?php echo esc_html( $tmdb_configured ? __( 'Status: Configured (write-only). Leave blank to keep it. Syncs poster/backdrop artwork from TMDB.', 'lunara-imdb-guard' ) : __( 'Not configured. Leave blank to reuse the Oscars Ledger TMDB key when that plugin is active.', 'lunara-imdb-guard' ) ); ?></p>
 						</td>
 					</tr>
 					<tr>
@@ -502,11 +502,18 @@ final class Lunara_IMDb_Guard {
 			wp_die( esc_html__( 'You do not have permission to save these settings.', 'lunara-imdb-guard' ) );
 		}
 
-		$api_key = isset( $_POST['lunara_imdb_guard_omdb_api_key'] ) ? sanitize_text_field( wp_unslash( $_POST['lunara_imdb_guard_omdb_api_key'] ) ) : '';
-		update_option( self::OPTION_API_KEY, $api_key );
+		// Write-only key fields: only overwrite a stored key when a non-empty
+		// value is submitted, so the premium OMDb key is never echoed back into
+		// the page HTML and a blank submit preserves the existing key.
+		$submitted_omdb = isset( $_POST['lunara_imdb_guard_omdb_api_key'] ) ? sanitize_text_field( wp_unslash( $_POST['lunara_imdb_guard_omdb_api_key'] ) ) : '';
+		if ( '' !== $submitted_omdb ) {
+			update_option( self::OPTION_API_KEY, $submitted_omdb );
+		}
 
-		$tmdb_api_key = isset( $_POST['lunara_imdb_guard_tmdb_api_key'] ) ? sanitize_text_field( wp_unslash( $_POST['lunara_imdb_guard_tmdb_api_key'] ) ) : '';
-		update_option( self::OPTION_TMDB_API_KEY, $tmdb_api_key );
+		$submitted_tmdb = isset( $_POST['lunara_imdb_guard_tmdb_api_key'] ) ? sanitize_text_field( wp_unslash( $_POST['lunara_imdb_guard_tmdb_api_key'] ) ) : '';
+		if ( '' !== $submitted_tmdb ) {
+			update_option( self::OPTION_TMDB_API_KEY, $submitted_tmdb );
+		}
 
 		wp_safe_redirect(
 			add_query_arg(
