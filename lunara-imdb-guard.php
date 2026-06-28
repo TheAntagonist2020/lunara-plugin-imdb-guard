@@ -293,7 +293,7 @@ final class Lunara_IMDb_Guard {
 					<tr>
 						<th scope="row"><label for="lunara_imdb_guard_tmdb_api_key"><?php esc_html_e( 'TMDB API Key', 'lunara-imdb-guard' ); ?></label></th>
 						<td>
-							<input type="text" class="regular-text" id="lunara_imdb_guard_tmdb_api_key" name="lunara_imdb_guard_tmdb_api_key" value="<?php echo esc_attr( $tmdb_api_key ); ?>">
+							<input type="password" class="regular-text" id="lunara_imdb_guard_tmdb_api_key" name="lunara_imdb_guard_tmdb_api_key" value="<?php echo esc_attr( $tmdb_api_key ); ?>" autocomplete="new-password">
 							<p class="description"><?php esc_html_e( 'Used to sync poster and backdrop artwork from TMDB. Leave blank to reuse the Oscars Ledger TMDB key when that plugin is active.', 'lunara-imdb-guard' ); ?></p>
 						</td>
 					</tr>
