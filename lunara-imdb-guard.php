@@ -22,7 +22,8 @@ define( 'LUNARA_IMDB_GUARD_DEFAULT_OMDB_API_KEY', '' );
 
 final class Lunara_IMDb_Guard {
 
-	const OPTION_API_KEY = 'lunara_imdb_guard_omdb_api_key';
+	const OPTION_API_KEY      = 'lunara_imdb_guard_omdb_api_key';
+	const OPTION_TMDB_API_KEY = 'lunara_imdb_guard_tmdb_api_key';
 	const META_STATUS    = '_lunara_imdb_guard_status';
 	const META_MESSAGE   = '_lunara_imdb_guard_message';
 	const META_EXPECTED  = '_lunara_imdb_guard_expected_id';
@@ -247,9 +248,10 @@ final class Lunara_IMDb_Guard {
 			wp_die( esc_html__( 'You do not have permission to view this page.', 'lunara-imdb-guard' ) );
 		}
 
-		$api_key  = $this->get_api_key();
-		$map_path = $this->get_theme_map_path();
-		$reviews  = get_posts(
+		$api_key       = $this->get_api_key();
+		$tmdb_api_key  = trim( (string) get_option( self::OPTION_TMDB_API_KEY, '' ) );
+		$map_path      = $this->get_theme_map_path();
+		$reviews       = get_posts(
 			array(
 				'post_type'              => 'review',
 				'post_status'            => 'publish',
@@ -286,6 +288,13 @@ final class Lunara_IMDb_Guard {
 						<td>
 							<input type="text" class="regular-text" id="lunara_imdb_guard_omdb_api_key" name="lunara_imdb_guard_omdb_api_key" value="<?php echo esc_attr( $api_key ); ?>">
 							<p class="description"><?php esc_html_e( 'Used for title/year to IMDb ID validation. This plugin currently defaults to the same OMDb key used by your desktop lookup tool unless you override it here.', 'lunara-imdb-guard' ); ?></p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="lunara_imdb_guard_tmdb_api_key"><?php esc_html_e( 'TMDB API Key', 'lunara-imdb-guard' ); ?></label></th>
+						<td>
+							<input type="text" class="regular-text" id="lunara_imdb_guard_tmdb_api_key" name="lunara_imdb_guard_tmdb_api_key" value="<?php echo esc_attr( $tmdb_api_key ); ?>">
+							<p class="description"><?php esc_html_e( 'Used to sync poster and backdrop artwork from TMDB. Leave blank to reuse the Oscars Ledger TMDB key when that plugin is active.', 'lunara-imdb-guard' ); ?></p>
 						</td>
 					</tr>
 					<tr>
@@ -495,6 +504,9 @@ final class Lunara_IMDb_Guard {
 
 		$api_key = isset( $_POST['lunara_imdb_guard_omdb_api_key'] ) ? sanitize_text_field( wp_unslash( $_POST['lunara_imdb_guard_omdb_api_key'] ) ) : '';
 		update_option( self::OPTION_API_KEY, $api_key );
+
+		$tmdb_api_key = isset( $_POST['lunara_imdb_guard_tmdb_api_key'] ) ? sanitize_text_field( wp_unslash( $_POST['lunara_imdb_guard_tmdb_api_key'] ) ) : '';
+		update_option( self::OPTION_TMDB_API_KEY, $tmdb_api_key );
 
 		wp_safe_redirect(
 			add_query_arg(
@@ -766,8 +778,11 @@ final class Lunara_IMDb_Guard {
 	 * @return array|false
 	 */
 	private function fetch_tmdb_images( $imdb_id ) {
-		$api_key = 'b17bcb1a2b1a44a50898eaf079bcdede';
-		
+		$api_key = $this->get_tmdb_api_key();
+		if ( '' === $api_key ) {
+			return false;
+		}
+
 		// Step 1: Resolve the internal numeric TMDB ID via External ID endpoint
 		$find_url = "https://api.themoviedb.org/3/find/{$imdb_id}?api_key={$api_key}&external_source=imdb_id";
 		$find_response = wp_remote_get( $find_url, array( 'timeout' => 10 ) );
@@ -1084,6 +1099,34 @@ final class Lunara_IMDb_Guard {
 		}
 
 		return LUNARA_IMDB_GUARD_DEFAULT_OMDB_API_KEY;
+	}
+
+	/**
+	 * Return the configured TMDB API key.
+	 *
+	 * Resolves, in order, from this plugin's own option, the Oscars Ledger
+	 * AAT_TMDB_API_KEY constant (so a single configured key serves both plugins),
+	 * a wp-config LUNARA_IMDB_GUARD_TMDB_API_KEY constant, or empty. The key is
+	 * never hardcoded so it stays out of source control and can be rotated
+	 * without a code change; poster/backdrop sync is skipped when it is empty.
+	 *
+	 * @return string
+	 */
+	private function get_tmdb_api_key() {
+		$option = trim( (string) get_option( self::OPTION_TMDB_API_KEY, '' ) );
+		if ( '' !== $option ) {
+			return $option;
+		}
+
+		if ( defined( 'AAT_TMDB_API_KEY' ) && '' !== (string) constant( 'AAT_TMDB_API_KEY' ) ) {
+			return trim( (string) constant( 'AAT_TMDB_API_KEY' ) );
+		}
+
+		if ( defined( 'LUNARA_IMDB_GUARD_TMDB_API_KEY' ) ) {
+			return trim( (string) constant( 'LUNARA_IMDB_GUARD_TMDB_API_KEY' ) );
+		}
+
+		return '';
 	}
 
 	/**
