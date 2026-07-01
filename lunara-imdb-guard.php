@@ -3,7 +3,7 @@
  * Plugin Name: Lunara IMDb Guard
  * Plugin URI: https://lunarafilm.com/
  * Description: Validates review IMDb IDs against title and year, auto-fills clear matches, syncs TMDB poster/backdrop artwork, and provides an editorial audit screen for Lunara.
- * Version: 0.2.0
+ * Version: 0.3.0
  * Author: Lunara Film
  * Author URI: https://lunarafilm.com/
  * License: GPL v2 or later
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'LUNARA_IMDB_GUARD_VERSION', '0.2.0' );
+define( 'LUNARA_IMDB_GUARD_VERSION', '0.3.0' );
 define( 'LUNARA_IMDB_GUARD_FILE', __FILE__ );
 define( 'LUNARA_IMDB_GUARD_DIR', plugin_dir_path( __FILE__ ) );
 define( 'LUNARA_IMDB_GUARD_DEFAULT_OMDB_API_KEY', '' );
@@ -35,6 +35,7 @@ final class Lunara_IMDb_Guard {
 	// Custom fields for the TMDB image URLs
 	const META_POSTER    = '_lunara_tmdb_poster_url';
 	const META_BACKDROP  = '_lunara_tmdb_backdrop_url';
+	const META_IMG_CHECKED = '_lunara_imdb_guard_images_checked';
 
 	/**
 	 * Singleton instance.
@@ -68,6 +69,7 @@ final class Lunara_IMDb_Guard {
 		add_action( 'admin_post_lunara_imdb_guard_validate', array( $this, 'handle_validate_request' ) );
 		add_action( 'admin_post_lunara_imdb_guard_apply', array( $this, 'handle_apply_request' ) );
 		add_action( 'admin_post_lunara_imdb_guard_bulk_audit', array( $this, 'handle_bulk_audit_request' ) );
+		add_action( 'admin_post_lunara_imdb_guard_fill_images', array( $this, 'handle_fill_images_request' ) );
 		add_action( 'admin_post_lunara_imdb_guard_save_settings', array( $this, 'handle_save_settings_request' ) );
 	}
 
@@ -310,6 +312,40 @@ final class Lunara_IMDb_Guard {
 
 			<p><a class="button button-primary" href="<?php echo esc_url( $bulk_url ); ?>"><?php esc_html_e( 'Run Bulk Audit', 'lunara-imdb-guard' ); ?></a></p>
 
+			<?php
+			$image_stats = $this->count_reviews_missing_images();
+			$fill_url    = wp_nonce_url(
+				add_query_arg( array( 'action' => 'lunara_imdb_guard_fill_images' ), admin_url( 'admin-post.php' ) ),
+				'lunara_imdb_guard_fill_images'
+			);
+			?>
+			<div style="margin:14px 0 26px;padding:16px 18px;border:1px solid #dcdcde;border-left:4px solid #c9a961;border-radius:6px;background:#fff;max-width:780px;">
+				<h2 style="margin:0 0 8px;"><?php esc_html_e( 'Poster & backdrop completeness', 'lunara-imdb-guard' ); ?></h2>
+				<p style="margin:0 0 8px;">
+					<?php if ( $tmdb_configured ) : ?>
+						<span style="color:#17653a;font-weight:600;">&#10003; <?php esc_html_e( 'TMDB connected', 'lunara-imdb-guard' ); ?></span>
+					<?php else : ?>
+						<span style="color:#b32d2e;font-weight:600;">&#10007; <?php esc_html_e( 'TMDB not configured — artwork cannot sync. Add a TMDB key above, or activate the Oscars Ledger plugin to share its key.', 'lunara-imdb-guard' ); ?></span>
+					<?php endif; ?>
+				</p>
+				<p style="margin:0 0 12px;">
+					<?php
+					printf(
+						/* translators: 1: reviews missing art that have an IMDb ID, 2: reviews with no IMDb ID */
+						esc_html__( '%1$d reviews with an IMDb ID are missing a poster or backdrop and can be filled from TMDB. %2$d reviews have no IMDb ID yet — validate those first.', 'lunara-imdb-guard' ),
+						(int) $image_stats['missing'],
+						(int) $image_stats['no_id']
+					);
+					?>
+				</p>
+				<?php if ( $tmdb_configured && $image_stats['missing'] > 0 ) : ?>
+					<a class="button button-primary" href="<?php echo esc_url( $fill_url ); ?>"><?php esc_html_e( 'Fill Missing Posters', 'lunara-imdb-guard' ); ?></a>
+					<span class="description" style="margin-left:8px;"><?php esc_html_e( 'Fills up to 20 per click; re-click to continue a large library.', 'lunara-imdb-guard' ); ?></span>
+				<?php elseif ( $tmdb_configured ) : ?>
+					<p style="margin:0;color:#17653a;font-weight:600;">&#10003; <?php esc_html_e( 'Every review with an IMDb ID already has artwork.', 'lunara-imdb-guard' ); ?></p>
+				<?php endif; ?>
+			</div>
+
 			<table class="widefat striped">
 				<thead>
 					<tr>
@@ -491,6 +527,103 @@ final class Lunara_IMDb_Guard {
 	}
 
 	/**
+	 * Batch-fill missing TMDB posters/backdrops across reviews.
+	 *
+	 * Non-destructive: only sets a poster/backdrop when it is currently empty,
+	 * so it never clobbers art a review already has. Processes a bounded batch
+	 * per click and reports how many remain, so a large library is handled by
+	 * re-clicking (and already-filled reviews are skipped on subsequent runs).
+	 *
+	 * @return void
+	 */
+	public function handle_fill_images_request() {
+		check_admin_referer( 'lunara_imdb_guard_fill_images' );
+
+		if ( ! current_user_can( 'edit_posts' ) ) {
+			wp_die( esc_html__( 'You do not have permission to run this.', 'lunara-imdb-guard' ) );
+		}
+
+		if ( '' === $this->get_tmdb_api_key() ) {
+			wp_safe_redirect(
+				add_query_arg(
+					array(
+						'post_type'                => 'review',
+						'page'                     => 'lunara-imdb-guard',
+						'lunara_imdb_guard_notice' => 'fill_no_tmdb',
+					),
+					admin_url( 'edit.php' )
+				)
+			);
+			exit;
+		}
+
+		$batch_cap = 20; // reviews synced per click (each = 2 TMDB calls).
+
+		$review_ids = get_posts(
+			array(
+				'post_type'              => 'review',
+				'post_status'            => 'publish',
+				'posts_per_page'         => 1000,
+				'fields'                 => 'ids',
+				'no_found_rows'          => true,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+			)
+		);
+
+		$filled_posters   = 0;
+		$filled_backdrops = 0;
+		$remaining        = 0;
+		$processed        = 0;
+
+		foreach ( $review_ids as $review_id ) {
+			$has_poster   = '' !== trim( (string) get_post_meta( $review_id, self::META_POSTER, true ) );
+			$has_backdrop = '' !== trim( (string) get_post_meta( $review_id, self::META_BACKDROP, true ) );
+			if ( $has_poster && $has_backdrop ) {
+				continue;
+			}
+
+			$imdb_id = $this->normalize_imdb_id( get_post_meta( $review_id, '_lunara_imdb_title_id', true ) );
+			if ( '' === $imdb_id ) {
+				continue; // No ID to look up — surfaced separately in the audit table.
+			}
+
+			if ( '' !== get_post_meta( $review_id, self::META_IMG_CHECKED, true ) ) {
+				continue; // Already attempted with a definitive TMDB response.
+			}
+
+			if ( $processed >= $batch_cap ) {
+				$remaining++;
+				continue;
+			}
+
+			$did = $this->fill_missing_images( $review_id, $imdb_id );
+			$processed++;
+			if ( ! empty( $did['poster'] ) ) {
+				$filled_posters++;
+			}
+			if ( ! empty( $did['backdrop'] ) ) {
+				$filled_backdrops++;
+			}
+		}
+
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'post_type'                => 'review',
+					'page'                     => 'lunara-imdb-guard',
+					'lunara_imdb_guard_notice' => 'filled',
+					'fp'                       => $filled_posters,
+					'fb'                       => $filled_backdrops,
+					'remaining'                => $remaining,
+				),
+				admin_url( 'edit.php' )
+			)
+		);
+		exit;
+	}
+
+	/**
 	 * Persist the API key.
 	 *
 	 * @return void
@@ -571,6 +704,30 @@ final class Lunara_IMDb_Guard {
 
 			case 'settings_saved':
 				$message = __( 'IMDb Guard settings saved.', 'lunara-imdb-guard' );
+				break;
+
+			case 'filled':
+				$fp  = isset( $_GET['fp'] ) ? absint( $_GET['fp'] ) : 0;
+				$fb  = isset( $_GET['fb'] ) ? absint( $_GET['fb'] ) : 0;
+				$rem = isset( $_GET['remaining'] ) ? absint( $_GET['remaining'] ) : 0;
+				$message = sprintf(
+					/* translators: 1: posters filled, 2: backdrops filled */
+					__( 'Filled %1$d posters and %2$d backdrops from TMDB.', 'lunara-imdb-guard' ),
+					$fp,
+					$fb
+				);
+				if ( $rem > 0 ) {
+					$message .= ' ' . sprintf(
+						/* translators: %d: reviews still missing artwork */
+						__( '%d reviews still need artwork — click "Fill Missing Posters" again to continue.', 'lunara-imdb-guard' ),
+						$rem
+					);
+				}
+				break;
+
+			case 'fill_no_tmdb':
+				$class   = 'notice notice-error is-dismissible';
+				$message = __( 'TMDB is not configured, so no artwork could be synced. Add a TMDB API key first.', 'lunara-imdb-guard' );
 				break;
 		}
 
@@ -856,6 +1013,88 @@ final class Lunara_IMDb_Guard {
 				delete_post_meta( $post_id, self::META_BACKDROP );
 			}
 		}
+	}
+
+	/**
+	 * Fill only the empty image slots for a post from TMDB. Never deletes or
+	 * overwrites an existing poster/backdrop.
+	 *
+	 * @param int    $post_id Post ID.
+	 * @param string $imdb_id The 'tt' id.
+	 * @return array Keys 'poster' and 'backdrop' (bool) — what was newly filled.
+	 */
+	private function fill_missing_images( $post_id, $imdb_id ) {
+		$did          = array( 'poster' => false, 'backdrop' => false );
+		$has_poster   = '' !== trim( (string) get_post_meta( $post_id, self::META_POSTER, true ) );
+		$has_backdrop = '' !== trim( (string) get_post_meta( $post_id, self::META_BACKDROP, true ) );
+
+		if ( $has_poster && $has_backdrop ) {
+			return $did;
+		}
+
+		$images = $this->fetch_tmdb_images( $imdb_id );
+		if ( ! is_array( $images ) ) {
+			return $did;
+		}
+
+		if ( ! $has_poster && ! empty( $images['poster'] ) ) {
+			update_post_meta( $post_id, self::META_POSTER, esc_url_raw( $images['poster'] ) );
+			$did['poster'] = true;
+		}
+		if ( ! $has_backdrop && ! empty( $images['backdrop'] ) ) {
+			update_post_meta( $post_id, self::META_BACKDROP, esc_url_raw( $images['backdrop'] ) );
+			$did['backdrop'] = true;
+		}
+
+		// TMDB gave a definitive answer for this title — mark it attempted so a
+		// title it has no (further) art for isn't re-queried on every run.
+		update_post_meta( $post_id, self::META_IMG_CHECKED, time() );
+
+		return $did;
+	}
+
+	/**
+	 * Count published reviews missing a poster or backdrop, split by whether
+	 * they have an IMDb ID to look one up with.
+	 *
+	 * @return array Keys 'missing' and 'no_id' (int).
+	 */
+	private function count_reviews_missing_images() {
+		$ids = get_posts(
+			array(
+				'post_type'              => 'review',
+				'post_status'            => 'publish',
+				'posts_per_page'         => 1000,
+				'fields'                 => 'ids',
+				'no_found_rows'          => true,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+			)
+		);
+
+		$missing = 0;
+		$no_id   = 0;
+		foreach ( $ids as $id ) {
+			$has_poster   = '' !== trim( (string) get_post_meta( $id, self::META_POSTER, true ) );
+			$has_backdrop = '' !== trim( (string) get_post_meta( $id, self::META_BACKDROP, true ) );
+			if ( $has_poster && $has_backdrop ) {
+				continue;
+			}
+			$imdb_id = $this->normalize_imdb_id( get_post_meta( $id, '_lunara_imdb_title_id', true ) );
+			if ( '' === $imdb_id ) {
+				$no_id++;
+				continue;
+			}
+			if ( '' !== get_post_meta( $id, self::META_IMG_CHECKED, true ) ) {
+				continue; // Already attempted — nothing more the puller can do.
+			}
+			$missing++;
+		}
+
+		return array(
+			'missing' => $missing,
+			'no_id'   => $no_id,
+		);
 	}
 
 	/**
