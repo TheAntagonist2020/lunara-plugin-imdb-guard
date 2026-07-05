@@ -3,7 +3,7 @@
  * Plugin Name: Lunara IMDb Guard
  * Plugin URI: https://lunarafilm.com/
  * Description: Validates review IMDb IDs against title and year, auto-fills clear matches, syncs TMDB poster/backdrop artwork, and provides an editorial audit screen for Lunara.
- * Version: 0.3.0
+ * Version: 0.4.0
  * Author: Lunara Film
  * Author URI: https://lunarafilm.com/
  * License: GPL v2 or later
@@ -71,6 +71,7 @@ final class Lunara_IMDb_Guard {
 		add_action( 'admin_post_lunara_imdb_guard_bulk_audit', array( $this, 'handle_bulk_audit_request' ) );
 		add_action( 'admin_post_lunara_imdb_guard_fill_images', array( $this, 'handle_fill_images_request' ) );
 		add_action( 'admin_post_lunara_imdb_guard_save_settings', array( $this, 'handle_save_settings_request' ) );
+		add_action( 'admin_post_lunara_imdb_guard_export_manifest', array( $this, 'handle_export_manifest_request' ) );
 	}
 
 	/**
@@ -344,6 +345,38 @@ final class Lunara_IMDb_Guard {
 				<?php elseif ( $tmdb_configured ) : ?>
 					<p style="margin:0;color:#17653a;font-weight:600;">&#10003; <?php esc_html_e( 'Every review with an IMDb ID already has artwork.', 'lunara-imdb-guard' ); ?></p>
 				<?php endif; ?>
+
+				<?php
+				$manifest_url = function ( $manifest_source, $manifest_scope ) {
+					return wp_nonce_url(
+						add_query_arg(
+							array(
+								'action' => 'lunara_imdb_guard_export_manifest',
+								'source' => $manifest_source,
+								'scope'  => $manifest_scope,
+							),
+							admin_url( 'admin-post.php' )
+						),
+						'lunara_imdb_guard_export_manifest'
+					);
+				};
+				global $wpdb;
+				$oscars_entities_table = $wpdb->prefix . 'aat_entities';
+				$oscars_available      = ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $oscars_entities_table ) ) === $oscars_entities_table );
+				?>
+				<hr style="margin:16px 0;">
+				<p style="margin:0 0 8px;">
+					<strong><?php esc_html_e( 'Local batch import (poster manifests)', 'lunara-imdb-guard' ); ?></strong><br>
+					<?php esc_html_e( 'Each line carries the film\'s IMDb ID and its title — save as titles.txt beside tools/local/local-poster-preflight.ps1 and run the launcher. Downloaded posters are named "tt-id - Title.jpg" so the importers map them automatically.', 'lunara-imdb-guard' ); ?>
+				</p>
+				<p style="margin:0;">
+					<a class="button" href="<?php echo esc_url( $manifest_url( 'reviews', 'missing' ) ); ?>"><?php esc_html_e( 'Reviews — missing posters', 'lunara-imdb-guard' ); ?></a>
+					<a class="button" href="<?php echo esc_url( $manifest_url( 'reviews', 'all' ) ); ?>"><?php esc_html_e( 'Reviews — all', 'lunara-imdb-guard' ); ?></a>
+					<?php if ( $oscars_available ) : ?>
+						<a class="button" href="<?php echo esc_url( $manifest_url( 'oscars', 'missing' ) ); ?>"><?php esc_html_e( 'Oscars films — missing posters', 'lunara-imdb-guard' ); ?></a>
+						<a class="button" href="<?php echo esc_url( $manifest_url( 'oscars', 'all' ) ); ?>"><?php esc_html_e( 'Oscars films — all', 'lunara-imdb-guard' ); ?></a>
+					<?php endif; ?>
+				</p>
 			</div>
 
 			<table class="widefat striped">
@@ -523,6 +556,99 @@ final class Lunara_IMDb_Guard {
 				admin_url( 'edit.php' )
 			)
 		);
+		exit;
+	}
+
+	/**
+	 * Download a poster manifest for the local TMDB batch tools.
+	 *
+	 * Every line carries the film's IMDb ID AND its title — the exact format
+	 * tools/local/local-poster-preflight.ps1 reads — so the local batch run
+	 * can verify each poster against the title, and every downloaded file is
+	 * named with both. Sources: the review library, or (when the Oscars
+	 * Ledger plugin's tables exist) the full Oscars title catalogue.
+	 */
+	public function handle_export_manifest_request() {
+		check_admin_referer( 'lunara_imdb_guard_export_manifest' );
+
+		if ( ! current_user_can( 'edit_posts' ) ) {
+			wp_die( esc_html__( 'You do not have permission to run this.', 'lunara-imdb-guard' ) );
+		}
+
+		$source = isset( $_GET['source'] ) && 'oscars' === $_GET['source'] ? 'oscars' : 'reviews';
+		$scope  = isset( $_GET['scope'] ) && 'all' === $_GET['scope'] ? 'all' : 'missing';
+		$lines  = array();
+
+		if ( 'reviews' === $source ) {
+			$review_ids = get_posts(
+				array(
+					'post_type'              => 'review',
+					'post_status'            => 'publish',
+					'posts_per_page'         => -1,
+					'orderby'                => 'title',
+					'order'                  => 'ASC',
+					'fields'                 => 'ids',
+					'no_found_rows'          => true,
+					'update_post_term_cache' => false,
+				)
+			);
+
+			foreach ( $review_ids as $review_id ) {
+				$imdb_id = $this->normalize_imdb_id( get_post_meta( $review_id, '_lunara_imdb_title_id', true ) );
+				if ( '' === $imdb_id ) {
+					continue;
+				}
+				if ( 'missing' === $scope && '' !== trim( (string) get_post_meta( $review_id, self::META_POSTER, true ) ) ) {
+					continue;
+				}
+				$title = trim( wp_strip_all_tags( (string) get_the_title( $review_id ) ) );
+				$year  = trim( (string) get_post_meta( $review_id, '_lunara_year', true ) );
+				if ( '' !== $year && false === strpos( $title, '(' . $year . ')' ) ) {
+					$title .= ' (' . $year . ')';
+				}
+				$lines[] = $imdb_id . ' | ' . $title;
+			}
+		} else {
+			global $wpdb;
+			$entities_table = $wpdb->prefix . 'aat_entities';
+			$posters_table  = $wpdb->prefix . 'aat_posters';
+
+			$has_entities = ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $entities_table ) ) === $entities_table );
+			if ( ! $has_entities ) {
+				wp_die( esc_html__( 'The Oscars Ledger tables are not available on this site.', 'lunara-imdb-guard' ) );
+			}
+			$has_posters = ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $posters_table ) ) === $posters_table );
+
+			if ( 'missing' === $scope && $has_posters ) {
+				$rows = $wpdb->get_results(
+					"SELECT e.entity_id, e.label FROM $entities_table e
+					 LEFT JOIN $posters_table p ON p.imdb_id = e.entity_id AND p.attachment_id > 0
+					 WHERE e.entity_type = 'title' AND e.entity_id LIKE 'tt%' AND p.imdb_id IS NULL
+					 ORDER BY e.sort_label ASC",
+					ARRAY_A
+				);
+			} else {
+				$rows = $wpdb->get_results(
+					"SELECT e.entity_id, e.label FROM $entities_table e
+					 WHERE e.entity_type = 'title' AND e.entity_id LIKE 'tt%'
+					 ORDER BY e.sort_label ASC",
+					ARRAY_A
+				);
+			}
+
+			foreach ( (array) $rows as $row ) {
+				$label   = trim( (string) $row['label'] );
+				$lines[] = strtolower( trim( (string) $row['entity_id'] ) ) . ( '' !== $label ? ' | ' . $label : '' );
+			}
+		}
+
+		nocache_headers();
+		header( 'Content-Type: text/plain; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="titles-' . $source . '-' . $scope . '-' . gmdate( 'Ymd' ) . '.txt"' );
+
+		echo '# Lunara poster manifest — source: ' . $source . ', scope: ' . $scope . ', ' . count( $lines ) . " films\n"; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo '# Feed to tools/local/local-poster-preflight.ps1 (save as titles.txt beside it).' . "\n"; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo implode( "\n", $lines ) . "\n"; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		exit;
 	}
 

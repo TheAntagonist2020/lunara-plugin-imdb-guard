@@ -1,0 +1,7 @@
+# Lunara poster manifest — one film per line, ID + title together.
+# Export a real one from WordPress: Reviews → IMDb Guard → poster manifest.
+# Accepted formats:
+tt0038192 | The True Glory (1945)
+The Godfather (1972) | tt0068646
+tt0039384
+Moonlight (2016)
