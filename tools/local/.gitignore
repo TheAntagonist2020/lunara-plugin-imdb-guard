@@ -1,0 +1,5 @@
+# Local working files — never committed.
+tmdb-key.txt
+titles.txt
+poster-output/
+poster-preflight-report-*.csv
