@@ -22,6 +22,9 @@ jobs:
             | xargs -0 -n1 php -l > /dev/null
           echo "PHP clean"
 
+      - name: Review header regression
+        run: php tests/review-header-context-regression.php
+
       - name: JS syntax
         run: |
           set -e

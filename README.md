@@ -14,7 +14,7 @@ This plugin validates Review IMDb IDs against title/year data, helps fill clear 
 
 ## Version
 
-Current baseline: `0.1.0`.
+Current baseline: `0.4.1`.
 
 ## Secrets
 
@@ -23,5 +23,6 @@ The Git baseline intentionally does not include a default OMDb API key. Configur
 ## Verification
 
 - Run PHP lint on `lunara-imdb-guard.php` after edits.
+- Run `php tests/review-header-context-regression.php` after edits.
 - Confirm the admin audit/settings screen loads.
 - Confirm Review edit screens still show IMDb Guard status/actions.
