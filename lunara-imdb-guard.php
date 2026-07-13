@@ -3,7 +3,7 @@
  * Plugin Name: Lunara IMDb Guard
  * Plugin URI: https://lunarafilm.com/
  * Description: Validates review IMDb IDs against title and year, auto-fills clear matches, syncs TMDB poster/backdrop artwork, and provides an editorial audit screen for Lunara.
- * Version: 0.4.0
+ * Version: 0.4.1
  * Author: Lunara Film
  * Author URI: https://lunarafilm.com/
  * License: GPL v2 or later
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'LUNARA_IMDB_GUARD_VERSION', '0.3.0' );
+define( 'LUNARA_IMDB_GUARD_VERSION', '0.4.1' );
 define( 'LUNARA_IMDB_GUARD_FILE', __FILE__ );
 define( 'LUNARA_IMDB_GUARD_DIR', plugin_dir_path( __FILE__ ) );
 define( 'LUNARA_IMDB_GUARD_DEFAULT_OMDB_API_KEY', '' );
@@ -1300,7 +1300,7 @@ final class Lunara_IMDb_Guard {
 			);
 		}
 
-		if ( preg_match( '//u', $content, $matches ) ) {
+		if ( preg_match( '/<!--\s*["“”]?([^<\r\n]+?)["“”]?\s*\((\d{4})\)(?:[^>]*)-->/u', $content, $matches ) ) {
 			return array(
 				'title' => $this->clean_lookup_title( $matches[1] ),
 				'year'  => trim( (string) $matches[2] ),
