@@ -102,6 +102,10 @@ $header_cases = array(
 		'content' => "<!-- Oppenheimer (2023) | IMDb: tt15398776 -->\n<!-- wp:paragraph --><p>Body.</p><!-- /wp:paragraph -->",
 		'title'   => 'Oppenheimer',
 	),
+	'Core importer header' => array(
+		'content' => '<!-- Oppenheimer (2023) -- tt15398776 -->',
+		'title'   => 'Oppenheimer',
+	),
 	'straight quotes' => array(
 		'content' => '<!-- "Oppenheimer" (2023) -->',
 		'title'   => 'Oppenheimer',
